@@ -1,0 +1,32 @@
+name: Franchise Mode Pipeline
+
+on:
+  schedule:
+    - cron: '0 11 * * *'  # 7:00 AM Eastern (UTC-4 in summer)
+  workflow_dispatch:        # allows manual trigger from GitHub UI
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:          ${{ secrets.SUPABASE_KEY }}
+          YAHOO_CONSUMER_KEY:    ${{ secrets.YAHOO_CONSUMER_KEY }}
+          YAHOO_CONSUMER_SECRET: ${{ secrets.YAHOO_CONSUMER_SECRET }}
+          YAHOO_ACCESS_TOKEN:    ${{ secrets.YAHOO_ACCESS_TOKEN }}
+          YAHOO_REFRESH_TOKEN:   ${{ secrets.YAHOO_REFRESH_TOKEN }}
+        run: python franchise_pipeline_v8.py
