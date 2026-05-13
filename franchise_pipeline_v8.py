@@ -989,7 +989,8 @@ def main():
 
         # 4. Scoreboard — matchup pairs + team stats
         # On Monday, metrics are for the week that just ended (week_number - 1)
-        metric_week = week_number - 1 if is_monday else week_number
+        force_week = os.environ.get("FORCE_WEEK")
+        metric_week = int(force_week) if force_week else (week_number - 1 if is_monday else week_number)
         matchup_pairs, team_stats = pull_scoreboard(access_token, metric_week)
 
         # 5. Roster snapshots
