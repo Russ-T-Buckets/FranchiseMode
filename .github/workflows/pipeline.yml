@@ -29,4 +29,5 @@ jobs:
           YAHOO_CONSUMER_SECRET: ${{ secrets.YAHOO_CONSUMER_SECRET }}
           YAHOO_ACCESS_TOKEN:    ${{ secrets.YAHOO_ACCESS_TOKEN }}
           YAHOO_REFRESH_TOKEN:   ${{ secrets.YAHOO_REFRESH_TOKEN }}
+          FORCE_WEEK:            ${{ secrets.FORCE_WEEK }}
         run: python franchise_pipeline_v8.py
