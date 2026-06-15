@@ -1,0 +1,32 @@
+name: Validate FWA
+
+on:
+  workflow_dispatch:
+    inputs:
+      week:
+        description: 'Week number to validate (e.g. 5)'
+        required: true
+        default: '5'
+
+jobs:
+  validate-fwa:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run FWA validation
+        env:
+          YAHOO_CONSUMER_KEY:    ${{ secrets.YAHOO_CONSUMER_KEY }}
+          YAHOO_CONSUMER_SECRET: ${{ secrets.YAHOO_CONSUMER_SECRET }}
+          YAHOO_ACCESS_TOKEN:    ${{ secrets.YAHOO_ACCESS_TOKEN }}
+          YAHOO_REFRESH_TOKEN:   ${{ secrets.YAHOO_REFRESH_TOKEN }}
+        run: python validate_fwa.py --week ${{ github.event.inputs.week }}
