@@ -10,9 +10,14 @@ team-ID or stat-ID editing required -- both are resolved automatically at runtim
 matching Yahoo's team names against baseball.teams, and Yahoo's stat display_names
 against a known label map.
 
-Usage (set as workflow env vars / repo secrets -- see the .yml file):
-    python3 populate_team_weekly_stats.py --weeks 1-12      # backfill a range
-    python3 populate_team_weekly_stats.py --weeks current   # just this week (weekly cron)
+Supports multiple seasons -- each year has its own Yahoo league_key (Yahoo issues a new
+one every season even though it's the same league). Team names/rosters reset each year
+too, so team matching is always scoped to (season_id, Yahoo league_key for that year).
+
+Usage:
+    python3 populate_team_weekly_stats.py --season 2026 --weeks 1-12
+    python3 populate_team_weekly_stats.py --season 2026 --weeks current   # weekly cron
+    python3 populate_team_weekly_stats.py --season 2024 --weeks 1-23     # historical backfill
 
 Required secrets/env vars (same Yahoo ones your existing pipeline already has):
     YAHOO_CONSUMER_KEY
@@ -30,8 +35,15 @@ import argparse
 import requests
 from datetime import datetime, date
 
-YAHOO_LEAGUE_KEY = "469.l.76761"   # 2026 season, The Franchise XII
-SEASON_YEAR = 2026
+# Yahoo issues a new league_key every season for the same league. From userMemories /
+# prior confirmation in Supabase baseball.seasons.yahoo_league_id:
+SEASON_LEAGUE_KEYS = {
+    2022: "412.l.71654",
+    2023: "422.l.47778",
+    2024: "431.l.78645",
+    2025: "458.l.72231",
+    2026: "469.l.76761",
+}
 
 YAHOO_API_BASE = "https://fantasysports.yahooapis.com/fantasy/v2"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://seqvzektwxxypdcqgtve.supabase.co")
@@ -124,20 +136,20 @@ def supabase_upsert(table, rows, on_conflict, schema="baseball"):
 # Auto-resolve: season_id, team_key -> team_id, stat_id -> column name
 # ---------------------------------------------------------------------------
 
-def resolve_season_id():
-    rows = supabase_get("seasons", {"year": f"eq.{SEASON_YEAR}", "select": "id,year"})
+def resolve_season_id(season_year):
+    rows = supabase_get("seasons", {"year": f"eq.{season_year}", "select": "id,year"})
     if not rows:
-        raise RuntimeError(f"No baseball.seasons row found for year={SEASON_YEAR}. Create it first.")
+        raise RuntimeError(f"No baseball.seasons row found for year={season_year}. Create it first.")
     return rows[0]["id"]
 
 
-def resolve_team_map(session, season_id):
+def resolve_team_map(session, season_id, league_key):
     """Fetch Yahoo's team list + Supabase's team list for this season.
     Priority: match on existing yahoo_team_id first (stable across renames),
     fall back to matching on team_name for any team that doesn't have one yet.
     Any successful name-match gets its yahoo_team_id written back to Supabase,
     so future runs (and future renames) don't depend on name matching again."""
-    yahoo_data = fetch_json(session, f"league/{YAHOO_LEAGUE_KEY}/teams")
+    yahoo_data = fetch_json(session, f"league/{league_key}/teams")
     teams_block = yahoo_data["fantasy_content"]["league"][1]["teams"]
     count = int(teams_block["count"])
 
@@ -194,9 +206,10 @@ def resolve_team_map(session, season_id):
     return team_map
 
 
-def resolve_stat_map(session):
-    """Fetch this league's real stat_id -> display_name, match against STAT_NAME_ALIASES."""
-    data = fetch_json(session, f"league/{YAHOO_LEAGUE_KEY}/settings")
+def resolve_league_settings(session, league_key):
+    """Fetch this league's real stat_id -> display_name (-> STAT_NAME_ALIASES), AND playoff_start_week,
+    so matchups can be tagged 'regular' vs 'playoff' correctly without guessing or hardcoding per year."""
+    data = fetch_json(session, f"league/{league_key}/settings")
     settings = data["fantasy_content"]["league"][1]["settings"][0]
     stat_categories = settings["stat_categories"]["stats"]
 
@@ -217,7 +230,16 @@ def resolve_stat_map(session):
         print("  (Unmatched Yahoo stats -- expected, these are categories we don't track, e.g. W, K, AVG):")
         for sid, label in unmatched:
             print(f"      stat_id={sid}  \"{label}\"")
-    return stat_map
+
+    playoff_start_week = settings.get("playoff_start_week")
+    if playoff_start_week is not None:
+        playoff_start_week = int(playoff_start_week)
+        print(f"  League playoffs start at week {playoff_start_week} (from Yahoo settings).")
+    else:
+        print("  ! Could not find playoff_start_week in Yahoo settings -- all weeks will be tagged 'regular'.")
+        print("    Check baseball.matchups.week_type manually for this season if playoff bucketing matters.")
+
+    return stat_map, playoff_start_week
 
 
 # ---------------------------------------------------------------------------
@@ -275,12 +297,20 @@ def parse_matchups(scoreboard_json, week, stat_map):
 # Main run
 # ---------------------------------------------------------------------------
 
-def run(weeks):
-    print("Resolving season_id, team map, and stat map from Yahoo + Supabase...")
+def run(season_year, weeks):
+    league_key = SEASON_LEAGUE_KEYS.get(season_year)
+    if not league_key:
+        print(f"FATAL: no Yahoo league_key known for season_year={season_year}.")
+        print(f"       Known seasons: {sorted(SEASON_LEAGUE_KEYS.keys())}")
+        print(f"       If this is a new season, add it to SEASON_LEAGUE_KEYS at the top of the script.")
+        sys.exit(1)
+
+    print(f"=== Season {season_year} (league_key={league_key}) ===")
+    print("Resolving season_id, team map, and stat/playoff settings from Yahoo + Supabase...")
     session = get_yahoo_session()
-    season_id = resolve_season_id()
-    team_map = resolve_team_map(session, season_id)
-    stat_map = resolve_stat_map(session)
+    season_id = resolve_season_id(season_year)
+    team_map = resolve_team_map(session, season_id, league_key)
+    stat_map, playoff_start_week = resolve_league_settings(session, league_key)
 
     if not team_map:
         print("FATAL: could not resolve any teams. Check that baseball.teams has rows for this season")
@@ -291,8 +321,10 @@ def run(weeks):
 
     for week in weeks:
         print(f"\nWeek {week}...")
-        sb_data = fetch_json(session, f"league/{YAHOO_LEAGUE_KEY}/scoreboard;week={week}")
+        sb_data = fetch_json(session, f"league/{league_key}/scoreboard;week={week}")
         matchups = parse_matchups(sb_data, week, stat_map)
+
+        week_type = "playoff" if (playoff_start_week is not None and week >= playoff_start_week) else "regular"
 
         matchup_rows = []
         stat_rows = []
@@ -308,7 +340,7 @@ def run(weeks):
             matchup_rows.append({
                 "season_id": season_id,
                 "week_number": week,
-                "week_type": "regular",
+                "week_type": week_type,
                 "home_team_id": team_a_id,
                 "away_team_id": team_b_id,
                 "home_wins": m["team_a_wins"],
@@ -341,24 +373,47 @@ def run(weeks):
         time.sleep(1)
 
     if any_failure:
-        print("\nCompleted with at least one upsert failure -- check logs above.")
+        print(f"\nSeason {season_year} completed with at least one upsert failure -- check logs above.")
+        return False
+    print(f"\nSeason {season_year} done.")
+    return True
+
+
+def debug_week(season_year, week):
+    league_key = SEASON_LEAGUE_KEYS.get(season_year)
+    if not league_key:
+        print(f"FATAL: no Yahoo league_key known for season_year={season_year}.")
         sys.exit(1)
-    print("\nDone.")
-
-
-def debug_week(week):
     session = get_yahoo_session()
-    data = fetch_json(session, f"league/{YAHOO_LEAGUE_KEY}/scoreboard;week={week}")
+    data = fetch_json(session, f"league/{league_key}/scoreboard;week={week}")
     import json
-    print(json.dumps(data, indent=2)[:8000])
+
+    print(f"=== Searching for win/loss/score related keys in {season_year} week {week} scoreboard ===\n")
+
+    def walk(obj, path=""):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                kl = str(k).lower()
+                if any(term in kl for term in ["win", "loss", "tie", "status", "stat_winner", "is_winner"]):
+                    print(f"  {path}.{k} = {json.dumps(v)[:200]}")
+                walk(v, f"{path}.{k}")
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                walk(v, f"{path}[{i}]")
+
+    walk(data)
+
+    print(f"\n=== First 6000 chars of full raw JSON (for context if the above wasn't enough) ===\n")
+    print(json.dumps(data, indent=2)[:6000])
 
 
-def parse_week_arg(weeks_arg):
+def parse_week_arg(weeks_arg, season_year):
     if weeks_arg == "current":
-        # ISO week-of-season isn't tracked here; "current" pulls the latest week Yahoo reports.
-        # Simplest safe approach: ask Yahoo for the league's current week via the league resource.
+        league_key = SEASON_LEAGUE_KEYS.get(season_year)
+        if not league_key:
+            raise RuntimeError(f"No league_key for season_year={season_year}.")
         session = get_yahoo_session()
-        data = fetch_json(session, f"league/{YAHOO_LEAGUE_KEY}")
+        data = fetch_json(session, f"league/{league_key}")
         league_info = data["fantasy_content"]["league"][0]
         current_week = next((x["current_week"] for x in league_info if isinstance(x, dict) and "current_week" in x), None)
         if current_week is None:
@@ -372,13 +427,37 @@ def parse_week_arg(weeks_arg):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--weeks", default="current", help="e.g. '1-12', '5', or 'current'")
-    parser.add_argument("--debug-week", type=int, help="dump raw Yahoo JSON for one week and exit")
+    parser.add_argument("--season", type=int, default=2026, help="Season year, e.g. 2024. Defaults to 2026.")
+    parser.add_argument("--seasons", default=None,
+                         help="Comma or range list for multi-season backfill, e.g. '2022-2025' or '2022,2023,2024,2025'. "
+                              "Overrides --season if given.")
+    parser.add_argument("--weeks", default="current", help="e.g. '1-12', '5', or 'current'. 'current' only valid for a single season.")
+    parser.add_argument("--debug-week", type=int, help="dump raw Yahoo JSON for one week and exit (uses --season)")
     args = parser.parse_args()
 
     if args.debug_week:
-        debug_week(args.debug_week)
+        debug_week(args.season, args.debug_week)
         sys.exit(0)
 
-    weeks = parse_week_arg(args.weeks)
-    run(weeks)
+    def expand_seasons(s):
+        if "-" in s and "," not in s:
+            a, b = s.split("-")
+            return list(range(int(a), int(b) + 1))
+        return [int(x.strip()) for x in s.split(",")]
+
+    seasons = expand_seasons(args.seasons) if args.seasons else [args.season]
+
+    if args.weeks == "current" and len(seasons) > 1:
+        print("FATAL: --weeks current only makes sense for a single season. "
+              "For historical backfill, specify an explicit week range, e.g. --weeks 1-23.")
+        sys.exit(1)
+
+    overall_ok = True
+    for year in seasons:
+        weeks = parse_week_arg(args.weeks, year)
+        ok = run(year, weeks)
+        overall_ok = overall_ok and ok
+        if len(seasons) > 1:
+            time.sleep(2)  # be polite to Yahoo between seasons
+
+    sys.exit(0 if overall_ok else 1)
