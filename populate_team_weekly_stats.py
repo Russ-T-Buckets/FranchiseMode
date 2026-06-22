@@ -63,6 +63,7 @@ STAT_NAME_ALIASES = {
     "era": "era", "earned run average": "era",
     "whip": "whip",
     "k/9": "k9", "k9": "k9", "strikeouts per 9 innings": "k9", "strikeouts per nine innings": "k9",
+    "ip": "ip", "innings pitched": "ip",
 }
 
 
@@ -357,7 +358,8 @@ def run(season_year, weeks):
                     "r": s.get("r"), "hr": s.get("hr"), "rbi": s.get("rbi"), "sb": s.get("sb"),
                     "obp": s.get("obp"), "sv": s.get("sv"), "qs": s.get("qs"),
                     "era": s.get("era"), "whip": s.get("whip"), "k9": s.get("k9"),
-                    "h": None, "ab": None, "pa": None, "ip": None,  # not in scoreboard payload
+                    "ip": s.get("ip"),
+                    "h": None, "ab": None, "pa": None,  # not in scoreboard payload
                     "updated_at": datetime.utcnow().isoformat(),
                 })
 
