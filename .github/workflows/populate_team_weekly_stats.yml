@@ -1,0 +1,67 @@
+name: Populate Team Weekly Stats
+
+on:
+  # Manual trigger -- use this ONCE today for the historical backfill.
+  # Go to: GitHub repo -> Actions tab -> "Populate Team Weekly Stats" -> Run workflow
+  # In the "weeks" box, type something like 1-12, then click the green "Run workflow" button.
+  workflow_dispatch:
+    inputs:
+      season:
+        description: "Single season year to pull, e.g. '2026'. Used unless 'seasons' below is filled in."
+        required: true
+        default: "2026"
+      seasons:
+        description: "OPTIONAL: multi-season backfill, e.g. '2022-2025'. If filled in, overrides 'season' above."
+        required: false
+        default: ""
+      weeks:
+        description: "Weeks to pull, e.g. '1-24', '5', or 'current'. 'current' only valid for a single season."
+        required: true
+        default: "current"
+      debug_week:
+        description: "OPTIONAL: set a week number here (e.g. 1) to dump raw Yahoo JSON for that week (uses 'season' above) instead of running normally. Leave blank for a normal run."
+        required: false
+        default: ""
+
+  # Automatic trigger -- runs every Monday at 11:00 UTC, pulls just the current week.
+  # Matches the cadence of franchise_pipeline_v8.py's daily 11:00 UTC run.
+  schedule:
+    - cron: "0 11 * * 1"   # minute hour day month day-of-week (1 = Monday)
+
+jobs:
+  populate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run populate_team_weekly_stats.py
+        env:
+          YAHOO_CONSUMER_KEY: ${{ secrets.YAHOO_CONSUMER_KEY }}
+          YAHOO_CONSUMER_SECRET: ${{ secrets.YAHOO_CONSUMER_SECRET }}
+          YAHOO_REFRESH_TOKEN: ${{ secrets.YAHOO_REFRESH_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          # If debug_week is set, dump raw Yahoo JSON for that week and stop -- nothing is written to Supabase.
+          if [ -n "${{ github.event.inputs.debug_week }}" ]; then
+            python3 populate_team_weekly_stats.py --season "${{ github.event.inputs.season }}" --debug-week "${{ github.event.inputs.debug_week }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "${{ github.event.inputs.seasons }}" ]; then
+              python3 populate_team_weekly_stats.py --seasons "${{ github.event.inputs.seasons }}" --weeks "${{ github.event.inputs.weeks }}"
+            else
+              python3 populate_team_weekly_stats.py --season "${{ github.event.inputs.season }}" --weeks "${{ github.event.inputs.weeks }}"
+            fi
+          else
+            # Scheduled Monday run: always just the current 2026 week.
+            python3 populate_team_weekly_stats.py --season 2026 --weeks current
+          fi
+
