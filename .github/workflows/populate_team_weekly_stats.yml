@@ -64,4 +64,3 @@ jobs:
             # Scheduled Monday run: always just the current 2026 week.
             python3 populate_team_weekly_stats.py --season 2026 --weeks current
           fi
-
