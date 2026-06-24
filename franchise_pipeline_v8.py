@@ -529,6 +529,10 @@ def pull_scoreboard(access_token, week_number):
 # SECTION 9: ROSTER SNAPSHOTS
 # ============================================================
 
+# ============================================================
+# SECTION 9: ROSTER SNAPSHOTS
+# ============================================================
+
 def pull_roster_snapshots(access_token, today, teams_map):
     print(f"[Rosters] Pulling snapshots for {today}...")
     yesterday = (today - timedelta(days=1)).isoformat()
@@ -539,20 +543,26 @@ def pull_roster_snapshots(access_token, today, teams_map):
 
     rows = []
     for yahoo_team_key, team_uuid in teams_map.items():
-        root = yahoo_get(access_token, f"team/{yahoo_team_key}/roster")
+        root = yahoo_get(access_token, f"team/{yahoo_team_key}/roster;date={today.isoformat()}")
         for player_el in root.iter("player"):
             yahoo_pid  = player_el.findtext(".//player_id")
             first_name = player_el.findtext(".//first") or ""
             last_name  = player_el.findtext(".//last") or ""
+
+            # Capture selected position (active slot, BN, IL, etc.)
+            selected_pos = player_el.findtext(".//selected_position/position") or None
+
             ensure_player_exists(yahoo_pid, first_name, last_name)
             player_uuid = get_player_uuid(yahoo_pid)
             if not player_uuid: continue
+
             rows.append({
-                "player_id":        player_uuid,
-                "team_id":          team_uuid,
-                "snapshot_date":    today.isoformat(),
-                "acquisition_type": "fa_pickup",
-                "first_day":        player_uuid not in yesterday_players
+                "player_id":          player_uuid,
+                "team_id":            team_uuid,
+                "snapshot_date":      today.isoformat(),
+                "acquisition_type":   "fa_pickup",
+                "first_day":          player_uuid not in yesterday_players,
+                "selected_position":  selected_pos,
             })
         time.sleep(0.2)
 
