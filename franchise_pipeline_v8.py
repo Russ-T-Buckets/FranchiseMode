@@ -336,7 +336,6 @@ def yahoo_get(access_token, endpoint, retries=3, backoff=2):
 # ============================================================
 # SECTION 5: SUPABASE HELPERS
 # ============================================================
-
 def sb_headers(schema="public"):
     h = {
         "apikey":        SUPABASE_KEY,
@@ -357,6 +356,22 @@ def sb_select(table, filters=""):
     if r.status_code != 200:
         raise Exception(f"[Supabase] Select failed on {table}: {r.text[:300]}")
     return r.json()
+
+def sb_upsert_by_id(table, rows):
+    """Update rows in-place by primary key (id). Used for field-level updates."""
+    if not rows: return
+    schema, tbl = table.split(".") if "." in table else ("public", table)
+    for row in rows:
+        row_id = row.pop("id")
+        url = f"{SUPABASE_URL}/rest/v1/{tbl}?id=eq.{row_id}"
+        r = requests_post_with_retry(
+            url,
+            headers={**sb_headers(schema), "Prefer": "resolution=merge-duplicates"},
+            json=row
+        )
+        if r.status_code not in (200, 201, 204):
+            print(f"[Supabase] Warning updating {table} id={row_id}: {r.status_code} {r.text[:200]}")
+        row["id"] = row_id  # restore so caller's dict isn't mutated
 
 # Conflict column map — tells Supabase which columns to use for upsert
 UPSERT_CONFLICT = {
@@ -384,7 +399,6 @@ def sb_delete_old(table, date_col, days_back):
     url = f"{SUPABASE_URL}/rest/v1/{tbl}?{date_col}=lt.{cutoff}"
     r = requests_delete_with_retry(url, headers=sb_headers(schema))
     print(f"[Cleanup] {table}: removed rows before {cutoff} (status {r.status_code})")
-
 
 # ============================================================
 # SECTION 6: PLAYER REGISTRY
@@ -416,7 +430,6 @@ def get_player_uuid(yahoo_player_id):
 # ============================================================
 # SECTION 7: TEAMS MAP
 # ============================================================
-
 def get_teams_map(access_token):
     print("[Teams] Building teams map...")
     root = yahoo_get(access_token, f"league/{LEAGUE_KEY}/teams")
@@ -440,9 +453,21 @@ def get_teams_map(access_token):
         else:
             print(f"  [Teams] Warning: '{yahoo_key}' ({name}) not found in Supabase")
 
+    # Auto-sync current Yahoo team names back to Supabase
+    name_updates = []
+    for yahoo_key, team_uuid in teams_map.items():
+        current_name = yahoo_key_to_name.get(yahoo_key)
+        if current_name:
+            name_updates.append({
+                "id":        team_uuid,
+                "team_name": current_name
+            })
+    if name_updates:
+        sb_upsert_by_id("baseball.teams", name_updates)
+        print(f"[Teams] Synced {len(name_updates)} team names.")
+
     print(f"[Teams] Mapped {len(teams_map)} of 12 teams.")
     return teams_map, yahoo_key_to_name
-
 
 # ============================================================
 # SECTION 8: SCOREBOARD + TEAM STATS
