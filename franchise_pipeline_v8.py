@@ -426,19 +426,19 @@ def get_teams_map(access_token):
         raise Exception(f"[Teams] No season row found for {SEASON_YEAR}")
     season_uuid = seasons[0]["id"]
 
-    sb_teams  = sb_select("baseball.teams", f"season_id=eq.{season_uuid}")
-    sb_by_name = {t["team_name"].lower().strip(): t["id"] for t in sb_teams}
+    sb_teams = sb_select("baseball.teams", f"season_id=eq.{season_uuid}")
+    sb_by_yahoo_id = {t["yahoo_team_id"]: t["id"] for t in sb_teams}
 
     teams_map = {}
     yahoo_key_to_name = {}
     for team_el in root.iter("team"):
         yahoo_key = team_el.findtext("team_key")
         name      = (team_el.findtext("name") or "").strip()
-        if name.lower() in sb_by_name:
-            teams_map[yahoo_key]        = sb_by_name[name.lower()]
+        if yahoo_key in sb_by_yahoo_id:
+            teams_map[yahoo_key]         = sb_by_yahoo_id[yahoo_key]
             yahoo_key_to_name[yahoo_key] = name
         else:
-            print(f"  [Teams] Warning: '{name}' not found in Supabase")
+            print(f"  [Teams] Warning: '{yahoo_key}' ({name}) not found in Supabase")
 
     print(f"[Teams] Mapped {len(teams_map)} of 12 teams.")
     return teams_map, yahoo_key_to_name
