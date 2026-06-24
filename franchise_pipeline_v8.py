@@ -80,7 +80,21 @@ def requests_delete_with_retry(url, retries=3, backoff=2, **kwargs):
                 print(f"  [Retry] Attempt {attempt} failed ({type(e).__name__}), retrying in {wait}s...")
                 time.sleep(wait)
     raise last_err
-
+  
+def requests_patch_with_retry(url, retries=3, backoff=2, **kwargs):
+    kwargs.setdefault("timeout", 30)
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.patch(url, **kwargs)
+            return r
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                wait = backoff * attempt
+                print(f"  [Retry] Attempt {attempt} failed ({type(e).__name__}), retrying in {wait}s...")
+                time.sleep(wait)
+    raise last_err
 # ============================================================
 # CONFIG
 # ============================================================
@@ -364,14 +378,14 @@ def sb_upsert_by_id(table, rows):
     for row in rows:
         row_id = row.pop("id")
         url = f"{SUPABASE_URL}/rest/v1/{tbl}?id=eq.{row_id}"
-        r = requests_post_with_retry(
+        r = requests_patch_with_retry(        # <-- was requests_post_with_retry
             url,
-            headers={**sb_headers(schema), "Prefer": "resolution=merge-duplicates"},
+            headers=sb_headers(schema),
             json=row
         )
         if r.status_code not in (200, 201, 204):
             print(f"[Supabase] Warning updating {table} id={row_id}: {r.status_code} {r.text[:200]}")
-        row["id"] = row_id  # restore so caller's dict isn't mutated
+        row["id"] = row_id
 
 # Conflict column map — tells Supabase which columns to use for upsert
 UPSERT_CONFLICT = {
