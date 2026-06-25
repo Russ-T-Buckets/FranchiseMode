@@ -1,7 +1,7 @@
 name: Run FWA Backfill from Sheet
 
 on:
-  workflow_dispatch:   # manual trigger only — Actions tab → Run workflow
+  workflow_dispatch:
 
 jobs:
   backfill:
