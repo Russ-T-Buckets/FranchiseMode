@@ -1,21 +1,17 @@
 """
 backfill_fwa_from_sheet.py
 
-Reads FWA values from Franchise_baseball_metrics.xlsx (weeks 1-11)
+Reads FWA values from the manual spreadsheet (weeks 1-11)
 and upserts into pipeline.weekly_metric_snapshots.
 
 Overwrites any existing FWA for these weeks.
-FER is intentionally ignored — will be computed separately.
-Week 12 is skipped (partial/broken — only More Defiant Jazz filled in).
+FER intentionally excluded.
+Week 12 skipped (partial — only More Defiant Jazz filled in).
 
 Upsert key: (player_id, week_number, season_year)
-
-Run from repo root:
-    python backfill_fwa_from_sheet.py --xlsx "Franchise baseball metrics.xlsx"
 """
 
 import os
-import sys
 import argparse
 import uuid
 import requests
@@ -27,9 +23,10 @@ from openpyxl import load_workbook
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 SEASON_YEAR  = 2026
-WEEKS        = list(range(1, 12))   # 1-11 inclusive; 12 skipped (partial)
+WEEKS        = list(range(1, 12))   # 1-11; week 12 skipped (partial)
 
-HEADERS = {
+# pipeline schema headers (for weekly_metric_snapshots)
+PIPELINE_HEADERS = {
     "apikey":          SUPABASE_KEY,
     "Authorization":   f"Bearer {SUPABASE_KEY}",
     "Content-Type":    "application/json",
@@ -38,18 +35,34 @@ HEADERS = {
     "Prefer":          "resolution=merge-duplicates",
 }
 
-# Headers for baseball schema (teams, players, seasons)
+# baseball schema headers (for players)
 BASEBALL_HEADERS = {
-    "apikey":          SUPABASE_KEY,
-    "Authorization":   f"Bearer {SUPABASE_KEY}",
-    "Content-Type":    "application/json",
-    "Accept-Profile":  "baseball",
-    "Content-Profile": "baseball",
+    "apikey":        SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type":  "application/json",
+    "Accept-Profile": "baseball",
 }
 
 # ---------------------------------------------------------------------------
-# Team name mapping: spreadsheet casing -> DB team_name (exact match)
+# Hardcoded 2026 team UUIDs (stable — queried from DB 2026-06-25)
+# Maps DB team_name -> UUID
 # ---------------------------------------------------------------------------
+TEAM_UUID = {
+    "Jackson County OrangTurangs": "5366ee5d-e4af-4396-a823-5c68ff2543b2",
+    "Down by the Schoolyard":      "1745e320-90c0-467f-8183-dc328c045596",
+    "Sho-Time":                    "823fa185-7aa2-40e3-83f5-0c4661f4453b",
+    "More Defiant Jazz":           "c20baac2-8ed3-4fcf-8841-589849b013e9",
+    "All Betts are Off":           "dee5c8c0-8562-4cc6-82f5-6d8d97580aad",
+    "Ass Cannons":                 "8dd32df8-a4d6-4cc0-90c7-18701a5825c2",
+    "Ronald's PlayPlace":          "7fe3b8b6-0466-4ded-a746-c67dc09d638a",
+    "Kekambas":                    "dcfbe677-8c59-4ea2-9a04-2e1f3ca12874",
+    "My Roman Empire":             "7063e9b9-31d8-4f23-8962-6cf3586b6ef3",
+    "I am the Breg-man":           "3c102f76-d71f-4e8b-bbfb-c9a14b382099",
+    "Greene Brown and Schlitty":   "49292066-93e3-414a-92e5-e4764f0e4924",
+    "Boston Stink Sox":            "c132b84e-edf2-45bc-beb5-592c5a378f09",
+}
+
+# Spreadsheet name -> DB team name
 TEAM_NAME_MAP = {
     "More Defiant Jazz":         "More Defiant Jazz",
     "All Betts Are Off":         "All Betts are Off",
@@ -66,84 +79,47 @@ TEAM_NAME_MAP = {
     "Honey Nuts":                "Jackson County OrangTurangs",
 }
 
+# Precompute: spreadsheet name -> UUID
+SHEET_NAME_TO_ID = {
+    sheet: TEAM_UUID[db]
+    for sheet, db in TEAM_NAME_MAP.items()
+    if db in TEAM_UUID
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def sb_get(schema, path, params=None):
-    hdrs = BASEBALL_HEADERS if schema == "baseball" else HEADERS
-    url  = f"{SUPABASE_URL}/rest/v1/{path}"
-    r = requests.get(url, headers=hdrs, params=params)
-    if not r.ok:
-        print(f"  ERROR GET {path}: {r.status_code} {r.text[:300]}")
+def sb_get_players():
+    """Paginate through baseball.players, return normalized_name -> id."""
+    url = f"{SUPABASE_URL}/rest/v1/players"
+    all_players = []
+    offset = 0
+    limit  = 1000
+    while True:
+        r = requests.get(url, headers=BASEBALL_HEADERS,
+                         params={"select": "id,first_name,last_name",
+                                 "limit": limit, "offset": offset})
         r.raise_for_status()
-    return r.json()
+        batch = r.json()
+        all_players.extend(batch)
+        if len(batch) < limit:
+            break
+        offset += limit
+    return all_players
 
 
 def sb_upsert(rows, batch_size=200):
-    """POST to pipeline.weekly_metric_snapshots with merge-duplicates."""
-    url = f"{SUPABASE_URL}/rest/v1/weekly_metric_snapshots"
+    url     = f"{SUPABASE_URL}/rest/v1/weekly_metric_snapshots"
     written = 0
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i+batch_size]
-        r = requests.post(url, headers=HEADERS, json=batch)
+        r = requests.post(url, headers=PIPELINE_HEADERS, json=batch)
         if not r.ok:
             print(f"  ERROR batch {i//batch_size}: {r.status_code} {r.text[:300]}")
             r.raise_for_status()
         written += len(batch)
     return written
-
-
-def load_teams(season_year):
-    """Returns sheet_name -> team_uuid for all 2026 teams."""
-    all_teams    = sb_get("baseball", "teams",    params={"select": "id,team_name", "limit": 100})
-    all_seasons  = sb_get("baseball", "seasons",  params={"select": "id,year",      "year": f"eq.{season_year}"})
-
-    if not all_seasons:
-        raise ValueError(f"No season found for year {season_year}")
-    season_id = all_seasons[0]["id"]
-
-    team_seasons = sb_get("baseball", "team_seasons",
-                          params={"select": "team_id", "season_id": f"eq.{season_id}", "limit": 100})
-    active_ids = {ts["team_id"] for ts in team_seasons}
-
-    db_name_to_id = {
-        t["team_name"]: t["id"]
-        for t in all_teams
-        if t["id"] in active_ids
-    }
-
-    sheet_name_to_id = {}
-    for sheet_name, db_name in TEAM_NAME_MAP.items():
-        if db_name in db_name_to_id:
-            sheet_name_to_id[sheet_name] = db_name_to_id[db_name]
-        else:
-            print(f"  WARNING: DB team not found for '{sheet_name}' -> '{db_name}'")
-
-    return sheet_name_to_id
-
-
-def load_players():
-    """Returns normalized_full_name -> player_id uuid."""
-    # Paginate — could be >1000 players
-    all_players = []
-    offset = 0
-    limit  = 1000
-    while True:
-        batch = sb_get("baseball", "players",
-                       params={"select": "id,first_name,last_name",
-                               "limit": limit, "offset": offset})
-        all_players.extend(batch)
-        if len(batch) < limit:
-            break
-        offset += limit
-
-    name_to_id = {}
-    for p in all_players:
-        full = f"{p['first_name']} {p['last_name']}".strip()
-        norm = normalize_name(full)
-        name_to_id[norm] = p["id"]
-    return name_to_id
 
 
 def normalize_name(name):
@@ -157,34 +133,42 @@ def normalize_name(name):
     return name
 
 
+def load_players():
+    players = sb_get_players()
+    name_to_id = {}
+    for p in players:
+        full = f"{p['first_name']} {p['last_name']}".strip()
+        name_to_id[normalize_name(full)] = p["id"]
+    return name_to_id
+
+
 def extract_week(wb, week_num):
-    """Returns list of {player_name, team_sheet_name, fwa} for the week."""
     ws       = wb[f"Week {week_num}"]
     all_rows = list(ws.iter_rows(values_only=True))
 
     header_row_idx = None
     for i, row in enumerate(all_rows):
-        row_strs = [str(c) if c is not None else "" for c in row]
-        if "Player" in row_strs and "FWA" in row_strs:
+        strs = [str(c) if c is not None else "" for c in row]
+        if "Player" in strs and "FWA" in strs:
             header_row_idx = i
             break
 
     if header_row_idx is None:
-        print(f"  Week {week_num}: could not find header row, skipping")
+        print(f"  Week {week_num}: no header row found, skipping")
         return []
 
-    header = all_rows[header_row_idx]
+    header     = all_rows[header_row_idx]
     col_player = col_team = col_fwa = None
     for i, h in enumerate(header):
-        if h == "Player":  col_player = i
-        if h == "Team":    col_team   = i
-        if h == "FWA":     col_fwa    = i
+        if h == "Player": col_player = i
+        if h == "Team":   col_team   = i
+        if h == "FWA":    col_fwa    = i
 
     if col_player is None or col_fwa is None:
         print(f"  Week {week_num}: missing Player or FWA column, skipping")
         return []
 
-    rows_out = []
+    out = []
     for row in all_rows[header_row_idx + 1:]:
         player = row[col_player] if col_player < len(row) else None
         team   = row[col_team]   if col_team is not None and col_team < len(row) else None
@@ -195,13 +179,12 @@ def extract_week(wb, week_num):
         if not isinstance(fwa, (int, float)):
             continue
 
-        rows_out.append({
+        out.append({
             "player_name":     player.strip(),
             "team_sheet_name": team.strip() if isinstance(team, str) else None,
             "fwa":             float(fwa),
         })
-
-    return rows_out
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -210,49 +193,44 @@ def extract_week(wb, week_num):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--xlsx",    required=True, help="Path to xlsx file")
+    parser.add_argument("--xlsx",    required=True)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    print(f"Team map: {len(SHEET_NAME_TO_ID)} sheet names -> UUIDs")
 
     print("Loading workbook...")
     wb = load_workbook(args.xlsx, read_only=True, data_only=True)
 
-    print("Loading teams from Supabase...")
-    sheet_name_to_team_id = load_teams(SEASON_YEAR)
-    print(f"  {len(sheet_name_to_team_id)} teams mapped")
-
     print("Loading players from Supabase...")
-    norm_name_to_player_id = load_players()
-    print(f"  {len(norm_name_to_player_id)} players in DB")
+    norm_to_id = load_players()
+    print(f"  {len(norm_to_id)} players loaded")
 
-    grand_total      = 0
+    grand_total       = 0
     unmatched_players = {}
     unmatched_teams   = {}
 
     for week_num in WEEKS:
         print(f"\n--- Week {week_num} ---")
         sheet_rows = extract_week(wb, week_num)
-        print(f"  {len(sheet_rows)} player rows in sheet")
+        print(f"  {len(sheet_rows)} rows in sheet")
 
-        upsert_rows        = []
-        skipped_no_player  = 0
-        skipped_no_team    = 0
+        upsert_rows       = []
+        skip_no_player    = 0
+        skip_no_team      = 0
 
         for sr in sheet_rows:
-            norm      = normalize_name(sr["player_name"])
-            player_id = norm_name_to_player_id.get(norm)
+            player_id = norm_to_id.get(normalize_name(sr["player_name"]))
             if player_id is None:
-                skipped_no_player += 1
+                skip_no_player += 1
                 unmatched_players.setdefault(sr["player_name"], []).append(week_num)
                 continue
 
-            team_id = None
-            if sr["team_sheet_name"]:
-                team_id = sheet_name_to_team_id.get(sr["team_sheet_name"])
-                if team_id is None:
-                    skipped_no_team += 1
-                    unmatched_teams.setdefault(sr["team_sheet_name"], []).append(week_num)
-                    continue
+            team_id = SHEET_NAME_TO_ID.get(sr["team_sheet_name"]) if sr["team_sheet_name"] else None
+            if team_id is None:
+                skip_no_team += 1
+                unmatched_teams.setdefault(sr["team_sheet_name"], []).append(week_num)
+                continue
 
             upsert_rows.append({
                 "id":          str(uuid.uuid4()),
@@ -269,7 +247,7 @@ def main():
 
         total_fwa = sum(r["fwa"] for r in upsert_rows)
         print(f"  {len(upsert_rows)} rows ready  |  FWA checksum: {total_fwa:.4f}")
-        print(f"  {skipped_no_player} skipped (player not in DB)  |  {skipped_no_team} skipped (team not in DB)")
+        print(f"  {skip_no_player} skipped (no player match)  |  {skip_no_team} skipped (no team match)")
 
         if not args.dry_run and upsert_rows:
             written = sb_upsert(upsert_rows)
@@ -278,19 +256,19 @@ def main():
 
     print(f"\n{'='*50}")
     if not args.dry_run:
-        print(f"DONE — {grand_total} total rows written across weeks {WEEKS[0]}-{WEEKS[-1]}")
+        print(f"DONE — {grand_total} rows written across weeks {WEEKS[0]}-{WEEKS[-1]}")
     else:
-        print("DRY RUN COMPLETE — nothing written")
+        print("DRY RUN — nothing written")
 
     if unmatched_players:
         print(f"\nUnmatched players ({len(unmatched_players)} unique):")
         for name, weeks in sorted(unmatched_players.items()):
-            print(f"  '{name}' — weeks {weeks}")
+            print(f"  '{name}' — weeks {sorted(set(weeks))}")
 
     if unmatched_teams:
         print(f"\nUnmatched teams ({len(unmatched_teams)} unique):")
         for name, weeks in sorted(unmatched_teams.items()):
-            print(f"  '{name}' — weeks {weeks}")
+            print(f"  '{name}' — first seen week {min(weeks)}")
 
 
 if __name__ == "__main__":
