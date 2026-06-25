@@ -392,6 +392,7 @@ UPSERT_CONFLICT = {
     "pipeline.roster_snapshots":        "player_id,snapshot_date",
     "pipeline.player_stats_daily":      "player_id,window_type,pulled_date",
     "pipeline.weekly_metric_snapshots": "player_id,week_number,season_year",
+    "baseball.player_weekly_stats":     "player_id,season_id,week_number",
 }
 
 def sb_upsert(table, rows):
@@ -1149,7 +1150,7 @@ def main():
 
         # 8. Monday lock
         if is_monday and metric_week >= 1:
-            run_monday_lock(metric_week)
+          run_monday_lock(access_token, metric_week, teams_map)
 
         # 9. Cleanup
         run_cleanup()
