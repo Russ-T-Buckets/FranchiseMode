@@ -540,17 +540,18 @@ def pull_scoreboard(access_token, week_number):
     return matchup_pairs, team_stats
 
 
-# ============================================================
+## ============================================================
 # SECTION 9: ROSTER SNAPSHOTS
 # ============================================================
-
 def pull_roster_snapshots(access_token, today, teams_map):
     print(f"[Rosters] Pulling snapshots for {today}...")
     yesterday = (today - timedelta(days=1)).isoformat()
-
     existing = sb_select("pipeline.roster_snapshots",
                          f"snapshot_date=eq.{yesterday}")
     yesterday_players = {row["player_id"] for row in existing}
+
+    # Positions that count as active (on the field, not bench/IL)
+    BENCH_IL_POSITIONS = {"BN", "IL", "IL10", "IL15", "IL60", "NA"}
 
     rows = []
     for yahoo_team_key, team_uuid in teams_map.items():
@@ -563,17 +564,27 @@ def pull_roster_snapshots(access_token, today, teams_map):
             # Capture selected position (active slot, BN, IL, etc.)
             selected_pos = player_el.findtext(".//selected_position/position") or None
 
+            # Derive is_active from selected_position
+            is_active = (
+                selected_pos is not None
+                and selected_pos not in BENCH_IL_POSITIONS
+            )
+
+            # Acquisition type from Yahoo (keep None if unavailable — don't hardcode)
+            acq_type = player_el.findtext(".//acquisition_type") or None
+
             ensure_player_exists(yahoo_pid, first_name, last_name)
             player_uuid = get_player_uuid(yahoo_pid)
             if not player_uuid: continue
 
             rows.append({
-                "player_id":          player_uuid,
-                "team_id":            team_uuid,
-                "snapshot_date":      today.isoformat(),
-                "acquisition_type":   "fa_pickup",
-                "first_day":          player_uuid not in yesterday_players,
-                "selected_position":  selected_pos,
+                "player_id":         player_uuid,
+                "team_id":           team_uuid,
+                "snapshot_date":     today.isoformat(),
+                "acquisition_type":  acq_type,
+                "first_day":         player_uuid not in yesterday_players,
+                "selected_position": selected_pos,
+                "is_active":         is_active,
             })
         time.sleep(0.2)
 
