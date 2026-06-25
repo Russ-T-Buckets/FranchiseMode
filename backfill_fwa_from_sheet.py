@@ -241,7 +241,7 @@ def main():
                 "fwa":         round(sr["fwa"], 6),
                 "fer":         None,
                 "fer_grade":   None,
-                "stat_basis":  "manual_sheet",
+                "stat_basis":  "matchup",
                 "is_locked":   True,
             })
 
