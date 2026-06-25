@@ -23,7 +23,7 @@ from openpyxl import load_workbook
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 SEASON_YEAR  = 2026
-WEEKS        = list(range(1, 12))   # 1-11; week 12 skipped (partial)
+WEEKS        = list(range(11, 12))   # weeks 1-10 already written   # 1-11; week 12 skipped (partial)
 
 # pipeline schema headers (for weekly_metric_snapshots)
 PIPELINE_HEADERS = {
@@ -244,6 +244,12 @@ def main():
                 "stat_basis":  "matchup",
                 "is_locked":   True,
             })
+
+        # Deduplicate by player_id — same player can appear twice in a week's sheet
+        seen_keys = {}
+        for r in upsert_rows:
+            seen_keys[r["player_id"]] = r
+        upsert_rows = list(seen_keys.values())
 
         total_fwa = sum(r["fwa"] for r in upsert_rows)
         print(f"  {len(upsert_rows)} rows ready  |  FWA checksum: {total_fwa:.4f}")
