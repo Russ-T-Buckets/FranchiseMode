@@ -110,7 +110,7 @@ def sb_get_players():
 
 
 def sb_upsert(rows, batch_size=200):
-    url     = f"{SUPABASE_URL}/rest/v1/weekly_metric_snapshots"
+    url     = f"{SUPABASE_URL}/rest/v1/weekly_metric_snapshots?on_conflict=player_id,week_number,season_year"
     written = 0
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i+batch_size]
