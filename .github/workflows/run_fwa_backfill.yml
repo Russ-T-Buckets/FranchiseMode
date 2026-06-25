@@ -1,0 +1,27 @@
+name: Run FWA Backfill from Sheet
+
+on:
+  workflow_dispatch:   # manual trigger only — Actions tab → Run workflow
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests openpyxl
+
+      - name: Run FWA backfill
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python backfill_fwa_from_sheet.py --xlsx Franchise_baseball_metrics.xlsx
