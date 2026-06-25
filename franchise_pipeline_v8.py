@@ -965,9 +965,104 @@ def write_daily_metrics(today, rostered_map, teams_map, week_number,
 # SECTION 14: MONDAY LOCK
 # ============================================================
 
-def run_monday_lock(week_number):
+def run_monday_lock(access_token, week_number, teams_map):
     print(f"[Monday] Locking week {week_number} metrics...")
 
+    # Date range for the week just ended (Mon–Sun)
+    today      = date.today()
+    week_end   = today - timedelta(days=1)   # Sunday
+    week_start = today - timedelta(days=7)   # Monday prior
+
+    # Get season_id for 2026
+    seasons = sb_select("baseball.seasons", f"year=eq.{SEASON_YEAR}")
+    if not seasons:
+        raise Exception("[Monday] No season row found")
+    season_uuid = seasons[0]["id"]
+
+    # ── Write player_weekly_stats ─────────────────────────────────────────
+    print(f"[Monday] Writing player_weekly_stats for week {week_number} "
+          f"({week_start} to {week_end})...")
+
+    # Pull all active roster snapshot rows for this week
+    active_snapshots = sb_select(
+        "pipeline.roster_snapshots",
+        f"snapshot_date=gte.{week_start.isoformat()}"
+        f"&snapshot_date=lte.{week_end.isoformat()}"
+        f"&is_active=eq.true"
+    )
+
+    # Pull all 7d player stats pulled during this week
+    week_stats = sb_select(
+        "pipeline.player_stats_daily",
+        f"pulled_date=gte.{week_start.isoformat()}"
+        f"&pulled_date=lte.{week_end.isoformat()}"
+        f"&window_type=eq.7d"
+    )
+
+    # Index stats by player_id and pulled_date for quick lookup
+    stats_by_pid_date = {}
+    for row in week_stats:
+        stats_by_pid_date[(row["player_id"], row["pulled_date"])] = row
+
+    # For each player, collect active days and average/sum their stats
+    # Group active snapshot days by (player_id, team_id)
+    active_days = {}  # (player_id, team_id) -> [pulled_dates]
+    for snap in active_snapshots:
+        key = (snap["player_id"], snap["team_id"])
+        if key not in active_days:
+            active_days[key] = {
+                "dates": [],
+                "selected_position": snap["selected_position"]
+            }
+        active_days[key]["dates"].append(snap["snapshot_date"])
+
+    player_week_rows = []
+    for (player_id, team_id), info in active_days.items():
+        # Collect stat rows for active days only
+        day_stats = []
+        for d in info["dates"]:
+            stat = stats_by_pid_date.get((player_id, d))
+            if stat:
+                day_stats.append(stat)
+
+        if not day_stats:
+            continue
+
+        # For counting stats: take the max across pulled days
+        # (7d window is cumulative so the last day has the full week total)
+        # For rate stats: take the last available value
+        best = max(day_stats, key=lambda x: x.get("pulled_date", ""))
+
+        player_week_rows.append({
+            "player_id":          player_id,
+            "team_id":            team_id,
+            "season_id":          season_uuid,
+            "week_number":        week_number,
+            "r":                  best.get("r"),
+            "hr":                 best.get("hr"),
+            "rbi":                best.get("rbi"),
+            "sb":                 best.get("sb"),
+            "obp":                best.get("obp"),
+            "pa_est":             best.get("pa_est"),
+            "ab":                 best.get("ab"),
+            "h":                  best.get("h"),
+            "ip":                 best.get("ip"),
+            "qs":                 best.get("qs"),
+            "sv":                 best.get("sv"),
+            "era":                best.get("era"),
+            "whip":               best.get("whip"),
+            "k_per_9":            best.get("k_per_9"),
+            "selected_position":  info["selected_position"],
+            "is_active":          True,
+        })
+
+    if player_week_rows:
+        sb_upsert("baseball.player_weekly_stats", player_week_rows)
+        print(f"[Monday] Wrote {len(player_week_rows)} player_weekly_stats rows.")
+    else:
+        print(f"[Monday] No player_weekly_stats rows to write.")
+
+    # ── Lock weekly_metric_snapshots ──────────────────────────────────────
     # Delete any corrupt rows with null player_id before locking
     schema = "pipeline"
     url = f"{SUPABASE_URL}/rest/v1/weekly_metric_snapshots?player_id=is.null"
@@ -977,12 +1072,12 @@ def run_monday_lock(week_number):
 
     unlocked = sb_select(
         "pipeline.weekly_metric_snapshots",
-        f"week_number=eq.{week_number}&season_year=eq.{SEASON_YEAR}&is_locked=eq.false&player_id=not.is.null"
+        f"week_number=eq.{week_number}&season_year=eq.{SEASON_YEAR}"
+        f"&is_locked=eq.false&player_id=not.is.null"
     )
     if not unlocked:
         print(f"[Monday] No unlocked rows for week {week_number}.")
         return
-    # Only lock rows that have a valid player_id (skip corrupt rows from bad runs)
     lock_rows = [{"id": row["id"], "is_locked": True}
                  for row in unlocked if row.get("player_id")]
     sb_upsert("pipeline.weekly_metric_snapshots", lock_rows)
