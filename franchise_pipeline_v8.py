@@ -543,10 +543,6 @@ def pull_scoreboard(access_token, week_number):
 # SECTION 9: ROSTER SNAPSHOTS
 # ============================================================
 
-# ============================================================
-# SECTION 9: ROSTER SNAPSHOTS
-# ============================================================
-
 def pull_roster_snapshots(access_token, today, teams_map):
     print(f"[Rosters] Pulling snapshots for {today}...")
     yesterday = (today - timedelta(days=1)).isoformat()
@@ -583,7 +579,6 @@ def pull_roster_snapshots(access_token, today, teams_map):
     sb_upsert("pipeline.roster_snapshots", rows)
     print(f"[Rosters] Wrote {len(rows)} roster rows.")
     return {row["player_id"]: row["team_id"] for row in rows}
-
 
 # ============================================================
 # SECTION 10: PA AND BB+HBP DERIVATION
