@@ -23,7 +23,7 @@ from openpyxl import load_workbook
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 SEASON_YEAR  = 2026
-WEEKS        = list(range(11, 12))   # weeks 1-10 already written   # 1-11; week 12 skipped (partial)
+WEEKS        = list(range(1, 12))    # 1-11; week 12 skipped (partial)
 
 # pipeline schema headers (for weekly_metric_snapshots)
 PIPELINE_HEADERS = {
@@ -87,6 +87,32 @@ SHEET_NAME_TO_ID = {
 }
 
 # ---------------------------------------------------------------------------
+# Player name aliases: sheet name -> DB name (handles nicknames/typos)
+# Vlad Guerrero Jr., Cam Schlitter, Daniel Lynch not in DB — stay unmatched
+# Shohei Ohtani (B)/(P) are split Yahoo entries — skipped intentionally
+# ---------------------------------------------------------------------------
+NAME_ALIASES = {
+    "Sal Perez":            "Salvador Perez",
+    "Shane Langeliers":     "Shea Langeliers",
+    "Alex Burleson":        "Alec Burleson",
+    "Bryce Turang":         "Brice Turang",
+    "Brian Woo":            "Bryan Woo",
+    "Cedanne Rafaela":      "Ceddanne Rafaela",
+    "Coulson Montgomery":   "Colson Montgomery",
+    "Danny Palencia":       "Daniel Palencia",
+    "J.J. Bleday":          "JJ Bleday",
+    "JT Ginn":              "J.T. Ginn",
+    "Jaren Duran":          "Jarren Duran",
+    "Louie Varland":        "Louis Varland",
+    "AJ Ewing":             "A.J. Ewing",
+    "Cam Schlitter":        "Cam Schlittler",
+    "Vlad Guerrero Jr.":    "Vladimir Guerrero Jr.",
+    "Daniel Lynch":         "Daniel Lynch IV",
+    "Shohei Ohtani (B)":    "Shohei Ohtani (Batter)",
+    "Shohei Ohtani (P)":    "Shohei Ohtani (Pitcher)",
+}
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -127,7 +153,7 @@ def normalize_name(name):
     name = unicodedata.normalize("NFD", name)
     name = "".join(c for c in name if unicodedata.category(c) != "Mn")
     name = name.lower().strip()
-    for suffix in [" jr.", " jr", " sr.", " sr", " iii", " ii"]:
+    for suffix in [" jr.", " jr", " sr.", " sr", " iv", " iii", " ii"]:
         if name.endswith(suffix):
             name = name[:-len(suffix)].strip()
     return name
@@ -220,7 +246,9 @@ def main():
         skip_no_team      = 0
 
         for sr in sheet_rows:
-            player_id = norm_to_id.get(normalize_name(sr["player_name"]))
+            # Apply name alias if one exists
+            display_name = NAME_ALIASES.get(sr["player_name"], sr["player_name"])
+            player_id = norm_to_id.get(normalize_name(display_name))
             if player_id is None:
                 skip_no_player += 1
                 unmatched_players.setdefault(sr["player_name"], []).append(week_num)
