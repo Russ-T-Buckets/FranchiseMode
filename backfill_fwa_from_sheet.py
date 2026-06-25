@@ -110,6 +110,14 @@ NAME_ALIASES = {
     "Daniel Lynch":         "Daniel Lynch IV",
     "Shohei Ohtani (B)":    "Shohei Ohtani (Batter)",
     "Shohei Ohtani (P)":    "Shohei Ohtani (Pitcher)",
+    # Spelling/name corrections found in DB
+    "Jacob Junis":          "Jakob Junis",
+    "Jacob Marsee":         "Jakob Marsee",
+    "Tyler Bibee":          "Tanner Bibee",
+    "Williams Contreras":   "Willson Contreras",
+    "Danny Santana":        "Dennis Santana",
+    "Cam Smith":            "Cade Smith",
+    "Jalen Duran":          "Jarren Duran",
 }
 
 # ---------------------------------------------------------------------------
