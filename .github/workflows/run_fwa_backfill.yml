@@ -22,6 +22,6 @@ jobs:
       - name: Run FWA backfill
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           python backfill_fwa_from_sheet.py --xlsx Franchise_baseball_metrics.xlsx
