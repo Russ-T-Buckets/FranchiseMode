@@ -1,0 +1,73 @@
+name: Franchise Pipeline v9
+
+on:
+  schedule:
+    - cron: '0 6 * * *'    # slot_stats -- 06:00 UTC daily (2AM Eastern in summer).
+                            # On Mondays this also runs weekly_lock internally.
+    - cron: '0 14 * * *'   # waiver -- 14:00 UTC daily (10AM Eastern in summer)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mode for a manual run: slot_stats, waiver, or backfill"
+        required: true
+        default: "slot_stats"
+        type: choice
+        options:
+          - slot_stats
+          - waiver
+          - backfill
+      season:
+        description: "OPTIONAL -- only used when mode=backfill. Season year, e.g. 2026."
+        required: false
+        default: "2026"
+      weeks:
+        description: "OPTIONAL -- only used when mode=backfill. e.g. '1-12' or '5'."
+        required: false
+        default: "1-12"
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Determine mode
+        id: pick-mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 6 * * *" ]; then
+            echo "mode=slot_stats" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 14 * * *" ]; then
+            echo "mode=waiver" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unrecognized trigger -- failing rather than guessing a mode." >&2
+            exit 1
+          fi
+
+      - name: Run pipeline
+        env:
+          SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:          ${{ secrets.SUPABASE_KEY }}
+          YAHOO_CONSUMER_KEY:    ${{ secrets.YAHOO_CONSUMER_KEY }}
+          YAHOO_CONSUMER_SECRET: ${{ secrets.YAHOO_CONSUMER_SECRET }}
+          YAHOO_ACCESS_TOKEN:    ${{ secrets.YAHOO_ACCESS_TOKEN }}
+          YAHOO_REFRESH_TOKEN:   ${{ secrets.YAHOO_REFRESH_TOKEN }}
+        run: |
+          MODE="${{ steps.pick-mode.outputs.mode }}"
+          if [ "$MODE" = "backfill" ]; then
+            python3 franchise_pipeline_v9.py --mode backfill \
+              --season "${{ github.event.inputs.season }}" \
+              --weeks "${{ github.event.inputs.weeks }}"
+          else
+            python3 franchise_pipeline_v9.py --mode "$MODE"
+          fi
