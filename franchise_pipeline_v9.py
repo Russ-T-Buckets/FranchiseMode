@@ -57,12 +57,21 @@ from datetime import date, datetime, timedelta
 # SECTION 0: RETRY WRAPPERS
 # ============================================================
 
-def _retry(method, url, retries=3, backoff=2, **kwargs):
+def _retry(method, url, retries=5, backoff=2, **kwargs):
     kwargs.setdefault("timeout", 30)
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            return method(url, **kwargs)
+            r = method(url, **kwargs)
+            if r.status_code in (502, 503, 504):
+                last_err = Exception(f"HTTP {r.status_code}: {r.text[:200]}")
+                if attempt < retries:
+                    wait = backoff * attempt
+                    print(f"  [Retry] Attempt {attempt} got HTTP {r.status_code}, retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                return r  # exhausted retries, return final response so caller's error message is accurate
+            return r
         except Exception as e:
             last_err = e
             if attempt < retries:
