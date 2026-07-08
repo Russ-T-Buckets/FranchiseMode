@@ -47,6 +47,7 @@ import sys
 import json
 import base64
 import time
+import math
 import argparse
 import requests
 import xml.etree.ElementTree as ET
@@ -282,6 +283,12 @@ UPSERT_CONFLICT = {
     "transactions":            "team_id,player_id,transaction_type,transaction_date",
 }
 
+def _json_safe(o):
+    if isinstance(o, float):  return None if (math.isnan(o) or math.isinf(o)) else o
+    if isinstance(o, dict):   return {k: _json_safe(v) for k, v in o.items()}
+    if isinstance(o, list):   return [_json_safe(v) for v in o]
+    return o
+
 def sb_upsert(table, rows, schema="baseball", batch_size=200):
     if not rows:
         return
@@ -292,7 +299,7 @@ def sb_upsert(table, rows, schema="baseball", batch_size=200):
     prefer = "resolution=merge-duplicates,return=minimal"
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i + batch_size]
-        r = requests_post_with_retry(url, headers=sb_headers(schema, prefer), json=batch)
+        r = requests_post_with_retry(url, headers=sb_headers(schema, prefer), json=_json_safe(batch))
         if r.status_code not in (200, 201, 204):
             print(f"[Supabase] Warning on {schema}.{table}: {r.status_code} {r.text[:300]}")
 
