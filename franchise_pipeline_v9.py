@@ -541,6 +541,8 @@ def run_slot_stats(access_token, season_id, teams_map, target_date, week_number)
 
                 pa_est, _ = derive_pa_and_bb_hbp(h, ab, obp, full_name)
                 ip_dec = ip_to_decimal(ip) if ip is not None else None
+                if not ip_dec:                 # None or 0.0 IP -> rate stats undefined
+                    era = whip = k9 = None
 
                 stat_values = {
                     "h": h, "ab": ab, "r": r, "hr": hr, "rbi": rbi, "sb": sb,
